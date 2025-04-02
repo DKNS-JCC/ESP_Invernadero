@@ -1,35 +1,3 @@
-
-/*
-===================ESP32 - Invernadero=================
-Developed by: Jorge Cuadrado Criado (DKNS-JCC)
-Date: 24/03/2025
-Version: 2.0
-
-===================DESCRIPTION========================
-El programa a continuación es un ejemplo de cómo se puede utilizar un ESP32 para enviar datos de temperatura y humedad a través de 
-BLE o WiFi + Firebase.
-Si se puentean los pines 12 y GND, el ESP32 enviará los datos a BLE. Si no se puentean, el ESP32 se conectará a wifi
-y enviará los datos a Firebase.
-======================================================
-
-===================CONNECTIONS========================
-DHT22:
-    - VCC: 3.3V
-    - GND: GND
-    - DATA: GPIO4
-
-MODE PIN:
-    - PIN_MODE: GPIO12 -> Puenteado a GND para BLE, sin puente para WiFi
-
-===================LIBRARIES==========================
-- DHT:
-    - adafruit/DHT sensor library@^1.4.6
-- WiFi:
-    - ESP32 included library
-
-======================================================
-*/
-
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -37,7 +5,7 @@ MODE PIN:
 #include <BLE2902.h>
 #include <DHT.h>
 #include <WiFi.h>
-#include <HTTPClient.h>
+#include <Firebase_ESP_Client.h>
 
 #define DHT_PIN 4
 #define DHT_TYPE DHT22
@@ -46,29 +14,37 @@ DHT dht(DHT_PIN, DHT_TYPE);
 // Pin para selección de modo
 #define PIN_MODE 12
 
-// WiFi y Firebase (Reemplazar)
-const char* ssid = "";      
-const char* password = "";  
-const char* firebaseHost = "";  
-const char* apiKey = "API_KEY";  
+//SSID y contraseña de la red WiFi !!!!!!!!!
+// Cambiar por los valores de la red WiFi a la que se conectará el ESP32
+const char *ssid = "-DeZX";
+const char *password = "";
+
+//!!!!!!!!CAMBIAR ESTOS VALORES POR LOS DEL PROYECTO!!!!!!!!
+#define API_KEY ""
+#define DATABASE_URL ""
 
 void conectarWiFi();
-void enviarDatosFirebase(float temperatura, float humedad);
+void iniciarFirebase();
+void enviarDatosFirestore(float temperatura, float humedad);
+
 void iniciarBLE();
 void actualizarBLE(float temperatura, float humedad);
 
 // Definir UUIDs para BLE
 #define SERVICE_UUID        "12345678-1234-5678-1234-56789abcdef0"
 
-//NO TOCAR POR EL AMOR DE DIOS
+//NO CAMBIAR LOS SIGUIENTES UUIDs
 #define TEMP_CHARACTERISTIC_UUID "00002a6e-0000-1000-8000-00805f9b34fb"
 #define HUM_CHARACTERISTIC_UUID "00002a6f-0000-1000-8000-00805f9b34fb"
 
 BLECharacteristic *pTempCharacteristic;
 BLECharacteristic *pHumCharacteristic;
 
-bool modoWiFi = false;
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
 
+bool modoWiFi = false;
 
 void setup() {
     Serial.begin(115200);
@@ -76,13 +52,14 @@ void setup() {
     pinMode(PIN_MODE, INPUT_PULLUP);
     pinMode(2, OUTPUT);
 
-    setCpuFrequencyMhz(80); //Ahorro de energía
+    setCpuFrequencyMhz(80); // Ahorro de energía
 
     // Determinar el modo de arranque
     if (digitalRead(PIN_MODE) == HIGH) {
         modoWiFi = true;
-        Serial.println("Modo WiFi + Firebase activado");
+        Serial.println("Modo WiFi + Firestore activado");
         conectarWiFi();
+        iniciarFirebase();
     } else {
         Serial.println("Modo BLE activado");
         iniciarBLE();
@@ -107,13 +84,13 @@ void loop() {
     Serial.println(" *C");
 
     if (modoWiFi) {
-        enviarDatosFirebase(t, h);
+        enviarDatosFirestore(t, h);
     } else {
         actualizarBLE(t, h);
     }
 }
 
-// ------------------ Funciones WiFi y Firebase ------------------
+// ------------------ Funciones WiFi y Firestore ------------------
 void conectarWiFi() {
     WiFi.begin(ssid, password);
     Serial.print("Conectando a WiFi...");
@@ -127,22 +104,35 @@ void conectarWiFi() {
     Serial.println("\nConectado a WiFi");
 }
 
-void enviarDatosFirebase(float temperatura, float humedad) {
-    if (WiFi.status() == WL_CONNECTED) {
-        HTTPClient http;
-        String url = String(firebaseHost) + "/sensores.json?auth=" + apiKey;
-        String payload = "{\"temperatura\": " + String(temperatura) + ", \"humedad\": " + String(humedad) + "}";
+void iniciarFirebase() {
+    config.api_key = API_KEY;
+    config.database_url = DATABASE_URL;
+    config.signer.test_mode = true; // Modo de prueba
+    Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
+    Serial.println("Firebase inicializado");
+}
 
-        http.begin(url);
-        http.addHeader("Content-Type", "application/json");
 
-        int httpResponseCode = http.PUT(payload);
-        Serial.print("Código de respuesta HTTP: ");
-        Serial.println(httpResponseCode);
-        http.end();
+void enviarDatosFirestore(float temperatura, float humedad) {
+    if (Firebase.ready()) {
+        String path = "/sensores/temperatura";
+        if (Firebase.RTDB.setFloat(&fbdo, path, temperatura)) {
+            Serial.println("Temperatura enviada a Firestore: " + String(temperatura));
+        } else {
+            Serial.println("Error al enviar temperatura: " + String(fbdo.errorReason().c_str()));
+        }
+
+        path = "/sensores/humedad";
+        if (Firebase.RTDB.setFloat(&fbdo, path, humedad)) {
+            Serial.println("Humedad enviada a Firestore: " + String(humedad));
+        } else {
+            Serial.println("Error al enviar humedad: " + String(fbdo.errorReason().c_str()));
+        }
     } else {
-        Serial.println("Error de conexión WiFi");
+        Serial.println("Firebase no está listo");
     }
+    delay(600000); // 10 minutos
 }
 
 // ------------------ Funciones BLE ------------------
